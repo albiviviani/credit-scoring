@@ -13,6 +13,9 @@ from credit_scoring.schemas import TrainingConfig
 from credit_scoring.data.load_data import load_openml_german_credit
 from credit_scoring.features.build_features import build_preprocessor
 from credit_scoring.utils.metrics import base_metrics
+from credit_scoring.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 def get_models():
     models = {
@@ -31,12 +34,17 @@ def get_models():
     return models
 
 def run(cfg: TrainingConfig):
+    logger.info("Starting training with config: %s", cfg.model_dump())
     X, y = load_openml_german_credit()
+    logger.info("Loaded dataset: X=%s, y=%s, positive_rate=%.3f", X.shape, y.shape, y.mean())
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=cfg.test_size, stratify=y, random_state=cfg.seed
     )
-    pre, _, _ = build_preprocessor(X_train)
+    logger.info("Split data: train=%d, test=%d, test_size=%.2f", len(X_train), len(X_test), cfg.test_size)
+    pre, num_cols, cat_cols = build_preprocessor(X_train)
+    logger.info("Preprocessor configured: num_cols=%d, cat_cols=%d", len(num_cols), len(cat_cols))
     models = get_models()
+    logger.info("Candidate models: %s", list(models.keys()))
 
     artifacts = Path("artifacts"); artifacts.mkdir(parents=True, exist_ok=True)
     cv = StratifiedKFold(n_splits=cfg.cv_splits, shuffle=True, random_state=cfg.seed)
@@ -47,7 +55,7 @@ def run(cfg: TrainingConfig):
             continue
         pipe = ImbPipeline(steps=[("pre", pre), ("smote", SMOTE(random_state=cfg.seed)), ("clf", clf)])
         auc = cross_val_score(pipe, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1).mean()
-        print(f"{name}: CV ROC-AUC={auc:.4f}")
+        logger.info("%s: CV ROC-AUC=%.4f", name, auc)
         if auc > best_auc:
             best_auc, best_name, best_pipe = auc, name, pipe
 
@@ -58,7 +66,11 @@ def run(cfg: TrainingConfig):
     m = base_metrics(y_test.values, y_prob)
     with open(artifacts / "metrics.json", "w") as f:
         json.dump({"cv_best_model": best_name, "cv_roc_auc": best_auc, "holdout": m}, f, indent=2)
-    print(f"Best: {best_name} | CV ROC-AUC={best_auc:.4f} | Holdout ROC-AUC={m['roc_auc']:.4f}")
+    logger.info(
+        "Best model=%s | CV ROC-AUC=%.4f | Holdout ROC-AUC=%.4f | AP=%.4f | F1=%.4f | threshold=%.3f",
+        best_name, best_auc, m["roc_auc"], m["avg_precision"], m["f1"], m["threshold"]
+    )
+    logger.info("Saved model to %s and metrics to %s", artifacts / "model.joblib", artifacts / "metrics.json")
 
 def cli():
     ap = argparse.ArgumentParser()
