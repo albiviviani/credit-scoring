@@ -1,0 +1,5 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Optional project configuration lives in setup.cfg; this file only declares the build system
